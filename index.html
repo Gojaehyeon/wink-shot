@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WINK SHOT — 윙크 사격 좀비</title>
+<style>
+  /* 레트로 한글 픽셀폰트 */
+  @import url('https://cdn.jsdelivr.net/npm/galmuri/dist/galmuri.css');
+
+  :root{
+    --bg:#04140a;
+    --bg2:#071c0d;
+    --green:#39ff14;
+    --green-dim:#1f7a3d;
+    --green-deep:#0c3d1c;
+    --ink:#bdffbd;
+    --danger:#ff3b3b;
+    --amber:#ffd23b;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; }
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Galmuri11','DungGeunMo',monospace;
+    overflow:hidden;
+    -webkit-font-smoothing:none;
+    image-rendering:pixelated;
+    cursor:none;
+  }
+
+  #stage{ position:fixed; inset:0; }
+  canvas{ display:block; position:absolute; inset:0; width:100%; height:100%; }
+  #game{ z-index:1; background:radial-gradient(circle at 50% 50%, #06210f 0%, #04140a 70%, #020a05 100%); }
+  /* 위는 캔버스 클리어색이 아니라 단순 비네팅 — 그라데이션 금지는 UI/도형에 적용 */
+  #cursor{ z-index:50; pointer-events:none; }
+
+  /* 스캔라인 오버레이 */
+  #scan{
+    position:fixed; inset:0; z-index:40; pointer-events:none;
+    background:repeating-linear-gradient(0deg, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,.18) 3px, rgba(0,0,0,0) 4px);
+    mix-blend-mode:multiply;
+  }
+
+  /* 웹캠 디버그 미리보기 */
+  #camWrap{
+    position:fixed; right:14px; bottom:14px; z-index:45;
+    width:188px; height:106px;
+    border:2px solid var(--green-dim);
+    background:#000; overflow:hidden;
+  }
+  #camWrap video{ display:none; }
+  #cam{ width:100%; height:100%; }
+  #camLabel{
+    position:absolute; top:0; left:0; font-size:9px; padding:1px 5px;
+    background:var(--green-deep); color:var(--green); letter-spacing:1px;
+  }
+
+  /* HUD */
+  #hud{
+    position:fixed; top:0; left:0; right:0; z-index:30; pointer-events:none;
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding:14px 18px; font-size:16px; letter-spacing:1px;
+    text-shadow:0 0 6px rgba(57,255,20,.5);
+  }
+  #hud .box{ background:rgba(4,20,10,.6); border:2px solid var(--green-dim); padding:6px 12px; }
+  #hud .lab{ color:var(--green-dim); font-size:11px; display:block; }
+  #hud .val{ color:var(--green); font-size:20px; }
+  #hp{ display:flex; gap:4px; margin-top:3px; }
+  #hp i{ width:14px; height:14px; background:var(--danger); display:inline-block; box-shadow:0 0 6px var(--danger); }
+  #hp i.lost{ background:var(--green-deep); box-shadow:none; }
+
+  /* 오버레이 화면 (시작/오버) */
+  .screen{
+    position:fixed; inset:0; z-index:35;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(2,10,5,.86); text-align:center; gap:22px; padding:30px;
+  }
+  .screen.hidden{ display:none; }
+  .title{
+    font-family:'Galmuri14','Galmuri11',monospace;
+    font-size:64px; color:var(--green); letter-spacing:4px; line-height:1.1;
+    text-shadow:0 0 2px #000, 4px 4px 0 var(--green-deep), 0 0 24px rgba(57,255,20,.6);
+  }
+  .title small{ display:block; font-size:18px; color:var(--ink); letter-spacing:6px; margin-top:10px; text-shadow:none; }
+  .sub{ font-size:15px; color:var(--ink); line-height:2; max-width:520px; }
+  .sub b{ color:var(--amber); }
+  .score-big{ font-size:30px; color:var(--amber); }
+
+  /* 각진 레트로 버튼 (그라데이션 없음, 직각) */
+  .btn{
+    pointer-events:auto;
+    font-family:inherit; font-size:22px; letter-spacing:2px;
+    color:var(--green); background:var(--bg2);
+    border:3px solid var(--green); border-radius:0;
+    padding:16px 40px; cursor:none; position:relative;
+    transition:none; text-shadow:0 0 6px rgba(57,255,20,.5);
+  }
+  .btn::after{ content:''; position:absolute; inset:3px; border:1px solid var(--green-dim); }
+  .btn.hover{ background:var(--green); color:#04140a; text-shadow:none; box-shadow:0 0 22px rgba(57,255,20,.8); }
+  .btn .dwell{ position:absolute; left:0; bottom:-7px; height:4px; width:0; background:var(--amber); }
+
+  #status{
+    position:fixed; left:0; right:0; bottom:24px; z-index:36; text-align:center;
+    font-size:13px; color:var(--green-dim); letter-spacing:1px;
+  }
+  .spinner{
+    display:inline-block; width:10px; height:10px; margin-right:8px;
+    border:2px solid var(--green-deep); border-top-color:var(--green);
+    border-radius:50%; animation:sp .7s linear infinite; vertical-align:middle;
+  }
+  @keyframes sp{ to{ transform:rotate(360deg); } }
+  .blink{ animation:bl 1s steps(2) infinite; }
+  @keyframes bl{ 50%{ opacity:.25; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="game"></canvas>
+  <canvas id="cursor"></canvas>
+</div>
+<div id="scan"></div>
+
+<div id="hud" class="hidden">
+  <div class="box"><span class="lab">SCORE</span><span class="val" id="score">0</span></div>
+  <div class="box"><span class="lab">WAVE</span><span class="val" id="wave">1</span></div>
+  <div class="box"><span class="lab">HP</span><div id="hp"></div></div>
+</div>
+
+<!-- 시작 화면 -->
+<div class="screen" id="startScreen">
+  <div class="title">WINK<br>SHOT<small>윙크 사격 좀비</small></div>
+  <div class="sub">
+    검지 손가락으로 <b>조준점</b>을 움직이고<br>
+    <b>윙크(한쪽 눈 감기)</b> 로 좀비를 사격하세요.<br>
+    조준점을 버튼에 올리고 윙크하면 클릭됩니다.
+  </div>
+  <button class="btn" id="startBtn" data-action="start">▶ 게임 시작</button>
+</div>
+
+<!-- 게임 오버 -->
+<div class="screen hidden" id="overScreen">
+  <div class="title" style="font-size:48px;color:var(--danger);text-shadow:4px 4px 0 #3d0c0c,0 0 24px rgba(255,59,59,.6)">GAME OVER</div>
+  <div class="sub">최종 점수<br><span class="score-big" id="finalScore">0</span></div>
+  <button class="btn" id="retryBtn" data-action="start">↻ 다시 도전</button>
+</div>
+
+<div id="status"><span class="spinner"></span>준비 중…</div>
+
+<div id="camWrap">
+  <span id="camLabel">CAM</span>
+  <video id="video" playsinline></video>
+  <canvas id="cam"></canvas>
+</div>
+
+<script type="module">
+import { HandLandmarker, FaceLandmarker, FilesetResolver }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+/* ───────────────────────── 캔버스 셋업 ───────────────────────── */
+const gameCv = document.getElementById('game');
+const curCv  = document.getElementById('cursor');
+const gtx = gameCv.getContext('2d');
+const ctx = curCv.getContext('2d');
+const camCv = document.getElementById('cam');
+const cmx = camCv.getContext('2d');
+const video = document.getElementById('video');
+
+let W=0,H=0,DPR=Math.min(2,window.devicePixelRatio||1);
+function resize(){
+  W=window.innerWidth; H=window.innerHeight;
+  for(const cv of [gameCv,curCv]){
+    cv.width=W*DPR; cv.height=H*DPR;
+    cv.getContext('2d').setTransform(DPR,0,0,DPR,0,0);
+  }
+}
+window.addEventListener('resize',resize); resize();
+camCv.width=188; camCv.height=106;
+
+/* ───────────────────────── 상태 ───────────────────────── */
+const statusEl = document.getElementById('status');
+const hudEl    = document.getElementById('hud');
+const startScreen = document.getElementById('startScreen');
+const overScreen  = document.getElementById('overScreen');
+const scoreEl = document.getElementById('score');
+const waveEl  = document.getElementById('wave');
+const hpEl    = document.getElementById('hp');
+const finalScoreEl = document.getElementById('finalScore');
+
+const STATE = { MENU:'menu', PLAY:'play', OVER:'over' };
+let state = STATE.MENU;
+
+// 조준점 (화면 좌표, 스무딩 적용)
+const aim = { x:W/2, y:H/2, tx:W/2, ty:H/2, found:false };
+const AIM_GAIN = 2.3;     // 손가락 움직임 증폭
+const AIM_SMOOTH = 0.35;  // lerp 계수
+
+// 윙크 / 발사 입력
+let winkArmed = true;     // 다시 무장됐는지 (눈 떠야 재무장)
+let fireEvent = false;    // 이번 프레임 발사 트리거
+let winkActive = false;   // 현재 윙크 중(시각 표시)
+
+/* ───────────────────────── 게임 데이터 ───────────────────────── */
+const player = { hp:5, maxHp:5 };
+let zombies = [];
+let particles = [];
+let shots = [];     // 사격 레이저 잔상
+let score=0, wave=1, spawnTimer=0, spawnGap=1.6, elapsed=0;
+let muzzle=0;       // 발사 플래시 타이머
+let shake=0;        // 화면 흔들림
+
+const TYPES = {
+  normal:{ hp:1, speed:42,  r:24, score:10, body:'#3bd16a', dark:'#187a39', name:'일반' },
+  fast:  { hp:1, speed:86,  r:19, score:15, body:'#c8ff4d', dark:'#6f8a1f', name:'빠른' },
+  big:   { hp:3, speed:24,  r:44, score:30, body:'#1f8a45', dark:'#0c3d1c', name:'큰놈' },
+};
+
+function resetGame(){
+  player.hp=player.maxHp;
+  zombies=[]; particles=[]; shots=[];
+  score=0; wave=1; spawnTimer=0; spawnGap=1.6; elapsed=0; muzzle=0; shake=0;
+  syncHud();
+}
+function syncHud(){
+  scoreEl.textContent=score;
+  waveEl.textContent=wave;
+  hpEl.innerHTML='';
+  for(let i=0;i<player.maxHp;i++){
+    const i2=document.createElement('i');
+    if(i>=player.hp) i2.className='lost';
+    hpEl.appendChild(i2);
+  }
+}
+
+function spawnZombie(){
+  // 가장자리 랜덤 위치
+  const edge = Math.floor(rand(0,4));
+  let x,y;
+  if(edge===0){ x=rand(0,W); y=-40; }
+  else if(edge===1){ x=W+40; y=rand(0,H); }
+  else if(edge===2){ x=rand(0,W); y=H+40; }
+  else { x=-40; y=rand(0,H); }
+
+  // 웨이브에 따라 빠른/큰놈 비중 증가
+  const roll=Math.random();
+  let key='normal';
+  const fastChance=Math.min(.15+wave*0.05,.45);
+  const bigChance =Math.min(.05+wave*0.04,.30);
+  if(roll<bigChance) key='big';
+  else if(roll<bigChance+fastChance) key='fast';
+  const t=TYPES[key];
+  zombies.push({ key, x,y, hp:t.hp, maxHp:t.hp, t, wob:rand(0,6.28), hitFlash:0 });
+}
+
+function rand(a,b){ return a+Math.random()*(b-a); }
+
+/* ───────────────────────── 사격 처리 ───────────────────────── */
+function doShot(){
+  muzzle=1; shake=Math.max(shake,5);
+  shots.push({ x:aim.x, y:aim.y, life:1 });
+  // 가장 위(나중에 그려진=가까운) 좀비부터 검사
+  for(let i=zombies.length-1;i>=0;i--){
+    const z=zombies[i];
+    const d=Math.hypot(z.x-aim.x, z.y-aim.y);
+    if(d<=z.t.r){
+      z.hp--; z.hitFlash=1;
+      hitParticles(aim.x,aim.y, z.t.body, 8);
+      if(z.hp<=0){
+        score+=z.t.score;
+        deathParticles(z.x,z.y,z.t.body);
+        zombies.splice(i,1);
+        syncHud();
+      }
+      return; // 한 발에 한 마리
+    }
+  }
+  // 빗나감 — 작은 먼지
+  hitParticles(aim.x,aim.y,'#2c6b3a',4);
+}
+
+function hitParticles(x,y,color,n){
+  for(let i=0;i<n;i++){
+    const a=rand(0,6.28), s=rand(40,180);
+    particles.push({ x,y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:rand(.2,.5), color, sz:rand(2,4) });
+  }
+}
+function deathParticles(x,y,color){
+  for(let i=0;i<18;i++){
+    const a=rand(0,6.28), s=rand(60,260);
+    particles.push({ x,y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:rand(.4,.9), color, sz:rand(3,6) });
+  }
+}
+
+/* ───────────────────────── UI 버튼 (조준점+윙크 클릭) ───────────────────────── */
+let hoverBtn=null, dwell=0;
+function updateButtons(fire){
+  const btns=[...document.querySelectorAll('.screen:not(.hidden) .btn')];
+  let over=null;
+  for(const b of btns){
+    const r=b.getBoundingClientRect();
+    if(aim.x>=r.left && aim.x<=r.right && aim.y>=r.top && aim.y<=r.bottom){ over=b; break; }
+  }
+  if(over!==hoverBtn){ hoverBtn?.classList.remove('hover'); dwell=0; }
+  hoverBtn=over;
+  if(over){
+    over.classList.add('hover');
+    if(fire){ activateBtn(over); }
+  }
+}
+function activateBtn(b){
+  const action=b.dataset.action;
+  if(action==='start') startGame();
+}
+
+/* ───────────────────────── 게임 흐름 ───────────────────────── */
+function startGame(){
+  resetGame();
+  state=STATE.PLAY;
+  startScreen.classList.add('hidden');
+  overScreen.classList.add('hidden');
+  hudEl.classList.remove('hidden');
+}
+function gameOver(){
+  state=STATE.OVER;
+  finalScoreEl.textContent=score;
+  hudEl.classList.add('hidden');
+  overScreen.classList.remove('hidden');
+}
+
+/* ───────────────────────── 업데이트 ───────────────────────── */
+let lastT=performance.now();
+function update(now){
+  const dt=Math.min(0.05,(now-lastT)/1000); lastT=now;
+
+  // 조준점 스무딩
+  aim.x += (aim.tx-aim.x)*AIM_SMOOTH;
+  aim.y += (aim.ty-aim.y)*AIM_SMOOTH;
+
+  const fire=fireEvent; fireEvent=false;
+
+  if(state===STATE.PLAY){
+    elapsed+=dt;
+    // 웨이브: 12초마다 난이도 상승
+    const newWave=1+Math.floor(elapsed/12);
+    if(newWave!==wave){ wave=newWave; spawnGap=Math.max(0.45,1.6-wave*0.13); syncHud(); }
+
+    // 스폰
+    spawnTimer-=dt;
+    if(spawnTimer<=0){ spawnZombie(); spawnTimer=spawnGap*rand(0.7,1.2); }
+
+    // 사격
+    if(fire) doShot();
+
+    // 좀비 이동
+    const cx=W/2, cy=H/2;
+    for(let i=zombies.length-1;i>=0;i--){
+      const z=zombies[i];
+      const dx=cx-z.x, dy=cy-z.y, d=Math.hypot(dx,dy)||1;
+      z.x+=dx/d*z.t.speed*dt;
+      z.y+=dy/d*z.t.speed*dt;
+      z.wob+=dt*8;
+      if(z.hitFlash>0) z.hitFlash-=dt*4;
+      if(d<46){ // 주인공 도달
+        player.hp--; shake=Math.max(shake,14);
+        deathParticles(z.x,z.y,'#ff5a5a');
+        zombies.splice(i,1); syncHud();
+        if(player.hp<=0){ gameOver(); }
+      }
+    }
+  } else {
+    // 메뉴/오버 — 버튼 상호작용
+    updateButtons(fire);
+  }
+
+  // 파티클
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.92; p.vy*=0.92; p.life-=dt;
+    if(p.life<=0) particles.splice(i,1);
+  }
+  for(let i=shots.length-1;i>=0;i--){ shots[i].life-=dt*3.5; if(shots[i].life<=0) shots.splice(i,1); }
+  if(muzzle>0) muzzle-=dt*5;
+  if(shake>0) shake-=dt*30;
+}
+
+/* ───────────────────────── 렌더 ───────────────────────── */
+function render(){
+  gtx.clearRect(0,0,W,H);
+  ctx.clearRect(0,0,W,H);
+
+  const sx=shake>0?rand(-shake,shake):0;
+  const sy=shake>0?rand(-shake,shake):0;
+  gtx.save(); gtx.translate(sx,sy);
+
+  // 바닥 격자 (레트로)
+  drawGrid();
+
+  if(state===STATE.PLAY || state===STATE.OVER){
+    // 사격 레이저 (주인공→피탄점 잔상)
+    for(const s of shots){
+      gtx.globalAlpha=s.life*0.8;
+      gtx.strokeStyle='#eaffea'; gtx.lineWidth=2;
+      gtx.beginPath(); gtx.moveTo(W/2,H/2); gtx.lineTo(s.x,s.y); gtx.stroke();
+    }
+    gtx.globalAlpha=1;
+
+    // 좀비
+    for(const z of zombies) drawZombie(z);
+
+    // 주인공
+    drawPlayer(W/2,H/2);
+  }
+
+  // 파티클
+  for(const p of particles){
+    gtx.globalAlpha=Math.max(0,p.life*2);
+    gtx.fillStyle=p.color;
+    gtx.fillRect(p.x-p.sz/2,p.y-p.sz/2,p.sz,p.sz);
+  }
+  gtx.globalAlpha=1;
+  gtx.restore();
+
+  // 조준점 (항상 최상단, 흔들림 영향 X)
+  drawCrosshair(aim.x,aim.y);
+}
+
+function drawGrid(){
+  gtx.strokeStyle='rgba(31,122,61,.18)'; gtx.lineWidth=1;
+  const g=46;
+  for(let x=(W/2)%g;x<W;x+=g){ gtx.beginPath(); gtx.moveTo(x,0); gtx.lineTo(x,H); gtx.stroke(); }
+  for(let y=(H/2)%g;y<H;y+=g){ gtx.beginPath(); gtx.moveTo(0,y); gtx.lineTo(W,y); gtx.stroke(); }
+}
+
+function px(x,y,w,h,c){ gtx.fillStyle=c; gtx.fillRect(Math.round(x),Math.round(y),w,h); }
+
+function drawPlayer(x,y){
+  const u=6; // 픽셀 단위
+  gtx.save(); gtx.translate(x,y);
+  // 그림자 링
+  gtx.strokeStyle='rgba(57,255,20,.35)'; gtx.lineWidth=2;
+  gtx.beginPath(); gtx.arc(0,0,40,0,6.28); gtx.stroke();
+  // 픽셀 생존자 (머리/몸/팔) — 밝은 시안그린
+  const C='#7CFFB0', D='#2f8f5a';
+  px(-u, -u*3.2, u*2, u*2, C);      // 머리
+  px(-u*1.5, -u*1.0, u*3, u*2.4, C);// 몸통
+  px(-u*1.5, -u*1.0, u*0.8, u*2.4, D);
+  px(u*0.7, -u*1.0, u*0.8, u*2.4, D);
+  px(-u*1.0, u*1.4, u*0.8, u*1.6, C); // 다리
+  px(u*0.2, u*1.4, u*0.8, u*1.6, C);
+  // 총구 방향 (조준점 쪽)
+  const a=Math.atan2(aim.y-y,aim.x-x);
+  gtx.rotate(a);
+  px(u*0.5,-u*0.4,u*2.2,u*0.8,'#dfffe9');
+  gtx.restore();
+}
+
+function drawZombie(z){
+  const t=z.t, u=t.r/4;
+  gtx.save(); gtx.translate(z.x,z.y);
+  const sway=Math.sin(z.wob)*u*0.4;
+  const flash=z.hitFlash>0;
+  const body=flash?'#ffffff':t.body;
+  const dark=flash?'#ffd0d0':t.dark;
+  // 머리
+  px(-u*1.4+sway,-u*3.6,u*2.8,u*2.6,body);
+  // 눈 (붉은 점)
+  px(-u*0.9+sway,-u*2.9,u*0.7,u*0.7,'#ff2b2b');
+  px(u*0.3+sway,-u*2.9,u*0.7,u*0.7,'#ff2b2b');
+  // 몸통
+  px(-u*2.0,-u*1.0,u*4,u*3.2,body);
+  px(-u*2.0,-u*1.0,u*4,u*0.7,dark);
+  // 팔 (앞으로 뻗음)
+  px(-u*2.8,-u*0.4,u*0.9,u*2.2,dark);
+  px(u*1.9,-u*0.4,u*0.9,u*2.2,dark);
+  // 다리
+  px(-u*1.4,u*2.0,u*1.0,u*1.8,dark);
+  px(u*0.4,u*2.0,u*1.0,u*1.8,dark);
+  // 큰놈 체력바
+  if(t.hp>1){
+    const w=t.r*1.8;
+    gtx.fillStyle='#0c3d1c'; gtx.fillRect(-w/2,-t.r-14,w,5);
+    gtx.fillStyle='#39ff14'; gtx.fillRect(-w/2,-t.r-14,w*(z.hp/z.maxHp),5);
+  }
+  gtx.restore();
+}
+
+function drawCrosshair(x,y){
+  const r=18;
+  ctx.save(); ctx.translate(x,y);
+  const col=winkActive?'#ffd23b':'#39ff14';
+  ctx.strokeStyle=col; ctx.lineWidth=2.5;
+  ctx.shadowColor=col; ctx.shadowBlur=12;
+  // 원
+  ctx.beginPath(); ctx.arc(0,0,r,0,6.28); ctx.stroke();
+  // 십자
+  ctx.beginPath();
+  ctx.moveTo(-r-7,0); ctx.lineTo(-5,0);
+  ctx.moveTo(r+7,0);  ctx.lineTo(5,0);
+  ctx.moveTo(0,-r-7); ctx.lineTo(0,-5);
+  ctx.moveTo(0,r+7);  ctx.lineTo(0,5);
+  ctx.stroke();
+  ctx.shadowBlur=0;
+  // 중심점
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(0,0,2.5,0,6.28); ctx.fill();
+  // 발사 플래시
+  if(muzzle>0){
+    ctx.globalAlpha=muzzle;
+    ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(0,0,r+10*(1-muzzle)+6,0,6.28); ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+  // 손가락 미감지 안내
+  if(!aim.found){
+    ctx.fillStyle='#ff3b3b'; ctx.font="11px 'Galmuri11',monospace";
+    ctx.textAlign='center'; ctx.fillText('손을 보여주세요',0,r+26);
+  }
+  ctx.restore();
+}
+
+/* ───────────────────────── MediaPipe ───────────────────────── */
+let handLM=null, faceLM=null, ready=false;
+
+async function setupModels(){
+  statusEl.innerHTML=`<span class="spinner"></span>인식 모델 불러오는 중…`;
+  const vision=await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  handLM=await HandLandmarker.createFromOptions(vision,{
+    baseOptions:{ modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate:"GPU" },
+    runningMode:"VIDEO", numHands:1
+  });
+  faceLM=await FaceLandmarker.createFromOptions(vision,{
+    baseOptions:{ modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate:"GPU" },
+    runningMode:"VIDEO", numFaces:1, outputFaceBlendshapes:true
+  });
+}
+async function setupCamera(){
+  statusEl.innerHTML=`<span class="spinner"></span>카메라 여는 중…`;
+  const stream=await navigator.mediaDevices.getUserMedia({
+    video:{ width:{ideal:640}, height:{ideal:360}, facingMode:"user" }, audio:false });
+  video.srcObject=stream;
+  await new Promise(res=>video.onloadedmetadata=()=>{ video.play(); res(); });
+}
+
+const WINK_ON=0.55, WINK_OFF=0.30, OPEN=0.35;
+let lastVideoTime=-1;
+
+function processVision(now){
+  if(!ready || video.readyState<2) return;
+  if(video.currentTime===lastVideoTime) return;
+  lastVideoTime=video.currentTime;
+
+  // 손 → 조준점
+  const hr=handLM.detectForVideo(video,now);
+  if(hr && hr.landmarks && hr.landmarks.length){
+    const lm=hr.landmarks[0];
+    const tip=lm[8]; // 검지 끝
+    // 미러 + 중심 기준 증폭
+    let fx=1-tip.x, fy=tip.y;
+    let ax=0.5+(fx-0.5)*AIM_GAIN;
+    let ay=0.5+(fy-0.5)*AIM_GAIN;
+    ax=Math.max(0,Math.min(1,ax)); ay=Math.max(0,Math.min(1,ay));
+    aim.tx=ax*W; aim.ty=ay*H; aim.found=true;
+    drawCamDebug(lm,hr);
+  } else {
+    aim.found=false;
+    drawCamDebug(null,null);
+  }
+
+  // 얼굴 → 윙크
+  const fr=faceLM.detectForVideo(video,now);
+  let bl=0,br=0;
+  if(fr && fr.faceBlendshapes && fr.faceBlendshapes.length){
+    for(const c of fr.faceBlendshapes[0].categories){
+      if(c.categoryName==='eyeBlinkLeft') bl=c.score;
+      else if(c.categoryName==='eyeBlinkRight') br=c.score;
+    }
+  }
+  // 윙크 = 한쪽만 강하게 감김 (자연스러운 양눈 깜빡임 배제)
+  const wink = (bl>WINK_ON && br<OPEN) || (br>WINK_ON && bl<OPEN);
+  const bothOpen = bl<WINK_OFF && br<WINK_OFF;
+  winkActive=wink;
+  if(wink && winkArmed){ fireEvent=true; winkArmed=false; }
+  if(bothOpen) winkArmed=true; // 눈 뜨면 재무장
+}
+
+function drawCamDebug(lm,hr){
+  cmx.save();
+  cmx.fillStyle='#000'; cmx.fillRect(0,0,188,106);
+  // 미러 영상 대신 랜드마크만 표시 (가벼움)
+  cmx.translate(188,0); cmx.scale(-1,1); // 미러
+  if(lm){
+    cmx.fillStyle='#39ff14';
+    for(const p of lm){ cmx.fillRect(p.x*188-1,p.y*106-1,2,2); }
+    // 검지 끝 강조
+    const t=lm[8];
+    cmx.fillStyle='#ffd23b'; cmx.fillRect(t.x*188-3,t.y*106-3,6,6);
+  }
+  cmx.restore();
+  if(winkActive){ cmx.fillStyle='#ffd23b'; cmx.fillRect(0,0,188,4); }
+}
+
+/* ───────────────────────── 메인 루프 ───────────────────────── */
+function loop(now){
+  processVision(now);
+  update(now);
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* ───────────────────────── 부트 ───────────────────────── */
+(async function boot(){
+  syncHud();
+  requestAnimationFrame(loop); // 모델 로딩 전에도 조준점/메뉴 렌더
+  try{
+    await setupModels();
+    await setupCamera();
+    ready=true;
+    statusEl.innerHTML=`<span style="color:var(--green)">●</span> 인식 준비 완료 — 검지로 조준, 윙크로 발사`;
+    setTimeout(()=>statusEl.classList.add('blink'),2500);
+  }catch(e){
+    console.error(e);
+    statusEl.innerHTML=`<span style="color:var(--danger)">카메라/모델 오류:</span> ${e.message} — 웹캠 권한을 확인하세요`;
+  }
+})();
+
+// 키보드 폴백 (디버그/접근성): 스페이스=발사, 마우스로도 조준 가능
+window.addEventListener('keydown',e=>{ if(e.code==='Space'){ e.preventDefault(); if(winkArmed){fireEvent=true;winkArmed=false;} } });
+window.addEventListener('keyup',e=>{ if(e.code==='Space') winkArmed=true; });
+window.addEventListener('mousemove',e=>{ if(!aim.found){ aim.tx=e.clientX; aim.ty=e.clientY; } });
+window.addEventListener('mousedown',()=>{ if(!aim.found && winkArmed){ fireEvent=true; winkArmed=false; } });
+window.addEventListener('mouseup',()=>{ winkArmed=true; });
+</script>
+</body>
+</html>
