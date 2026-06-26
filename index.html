@@ -70,6 +70,9 @@
   #hp{ display:flex; gap:4px; margin-top:3px; }
   #hp i{ width:14px; height:14px; background:var(--danger); display:inline-block; box-shadow:0 0 6px var(--danger); }
   #hp i.lost{ background:var(--green-deep); box-shadow:none; }
+  #dualBadge{ color:#04140a !important; background:var(--amber) !important; border-color:var(--amber) !important;
+    font-size:16px; padding:8px 12px; letter-spacing:1px; box-shadow:0 0 18px rgba(255,210,59,.7);
+    animation:bl .8s steps(2) infinite; }
 
   /* 오버레이 화면 (시작/오버) */
   .screen{
@@ -124,9 +127,15 @@
 <canvas id="cursor"></canvas>
 
 <div id="hud" class="hidden">
-  <div class="box"><span class="lab">SCORE</span><span class="val" id="score">0</span></div>
-  <div class="box"><span class="lab">WAVE</span><span class="val" id="wave">1</span></div>
-  <div class="box"><span class="lab">HP</span><div id="hp"></div></div>
+  <div style="display:flex;gap:10px;align-items:flex-start">
+    <div class="box"><span class="lab">SCORE</span><span class="val" id="score">0</span></div>
+    <div class="box"><span class="lab">KILLS</span><span class="val" id="kills">0</span></div>
+    <div class="box"><span class="lab">WAVE</span><span class="val" id="wave">1</span></div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:flex-start">
+    <div class="box" id="dualBadge" style="display:none">⚡ 쌍권총 ⚡</div>
+    <div class="box"><span class="lab">HP</span><div id="hp"></div></div>
+  </div>
 </div>
 
 <!-- 시작 화면 -->
@@ -185,8 +194,10 @@ const hudEl    = document.getElementById('hud');
 const startScreen = document.getElementById('startScreen');
 const overScreen  = document.getElementById('overScreen');
 const scoreEl = document.getElementById('score');
+const killsEl = document.getElementById('kills');
 const waveEl  = document.getElementById('wave');
 const hpEl    = document.getElementById('hp');
+const dualBadge = document.getElementById('dualBadge');
 const finalScoreEl = document.getElementById('finalScore');
 
 const STATE = { MENU:'menu', PLAY:'play', OVER:'over' };
@@ -202,14 +213,66 @@ let winkArmed = true;     // 다시 무장됐는지 (눈 떠야 재무장)
 let fireEvent = false;    // 이번 프레임 발사 트리거
 let winkActive = false;   // 현재 윙크 중(시각 표시)
 
+/* ───────────────────────── 효과음 (Web Audio 합성) ───────────────────────── */
+let actx=null;
+function audio(){
+  if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return null; } }
+  if(actx.state==='suspended') actx.resume();
+  return actx;
+}
+// 자동재생 정책: 사용자 제스처에서 오디오 컨텍스트 깨우기
+['pointerdown','keydown','touchstart'].forEach(ev=>
+  window.addEventListener(ev,()=>audio(),{passive:true}));
+
+function tone({type='square',f0=440,f1=null,dur=0.1,vol=0.2,delay=0}){
+  const a=audio(); if(!a) return;
+  const t=a.currentTime+delay;
+  const o=a.createOscillator(), g=a.createGain();
+  o.type=type; o.frequency.setValueAtTime(f0,t);
+  if(f1) o.frequency.exponentialRampToValueAtTime(Math.max(30,f1),t+dur);
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol,t+0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g).connect(a.destination); o.start(t); o.stop(t+dur+0.02);
+}
+function noise({dur=0.15,vol=0.25,cut=1400,delay=0}){
+  const a=audio(); if(!a) return;
+  const t=a.currentTime+delay;
+  const n=Math.floor(a.sampleRate*dur);
+  const buf=a.createBuffer(1,n,a.sampleRate), d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2);
+  const s=a.createBufferSource(); s.buffer=buf;
+  const g=a.createGain(); g.gain.value=vol;
+  const f=a.createBiquadFilter(); f.type='lowpass'; f.frequency.value=cut;
+  s.connect(f).connect(g).connect(a.destination); s.start(t);
+}
+// "퓨!" 레이저 사격음
+function sfxShoot(){ tone({type:'square',f0:900,f1:180,dur:0.10,vol:0.16}); noise({dur:0.05,vol:0.08,cut:3000}); }
+// 쌍권총: 살짝 디튠한 두 발
+function sfxShootDual(){ tone({type:'square',f0:900,f1:180,dur:0.10,vol:0.14}); tone({type:'square',f0:760,f1:150,dur:0.11,vol:0.12,delay:0.03}); noise({dur:0.05,vol:0.08,cut:3000}); }
+// 명중(처치 전) 틱
+function sfxHit(){ tone({type:'triangle',f0:520,f1:760,dur:0.05,vol:0.12}); }
+// 좀비 처치 폭발
+function sfxKill(){ noise({dur:0.22,vol:0.28,cut:900}); tone({type:'sawtooth',f0:240,f1:60,dur:0.2,vol:0.18}); }
+// 주인공 피격
+function sfxDamage(){ tone({type:'square',f0:160,f1:50,dur:0.25,vol:0.25}); noise({dur:0.18,vol:0.18,cut:600}); }
+// 쌍권총 활성 팡파레
+function sfxDual(){ [523,659,784,1047].forEach((f,i)=>tone({type:'square',f0:f,dur:0.12,vol:0.18,delay:i*0.09})); }
+// 게임 오버 하강음
+function sfxOver(){ [392,330,262,196].forEach((f,i)=>tone({type:'sawtooth',f0:f,dur:0.3,vol:0.2,delay:i*0.18})); }
+
 /* ───────────────────────── 게임 데이터 ───────────────────────── */
 const player = { hp:5, maxHp:5 };
 let zombies = [];
 let particles = [];
 let shots = [];     // 사격 레이저 잔상
-let score=0, wave=1, spawnTimer=0, spawnGap=1.6, elapsed=0;
+let popups = [];    // 점수 팝업
+let banner = { text:'', life:0 };  // 화면 중앙 알림
+let score=0, wave=1, kills=0, spawnTimer=0, spawnGap=1.6, elapsed=0;
+let dualMode=false; // 쌍권총 모드
 let muzzle=0;       // 발사 플래시 타이머
 let shake=0;        // 화면 흔들림
+const DUAL_AT=10;   // 쌍권총 활성 킬 수
 
 const TYPES = {
   normal:{ hp:1, speed:42,  r:36, score:10, body:'#3bd16a', dark:'#187a39', name:'일반' },
@@ -219,18 +282,30 @@ const TYPES = {
 
 function resetGame(){
   player.hp=player.maxHp;
-  zombies=[]; particles=[]; shots=[];
-  score=0; wave=1; spawnTimer=0; spawnGap=1.6; elapsed=0; muzzle=0; shake=0;
+  zombies=[]; particles=[]; shots=[]; popups=[];
+  banner={text:'',life:0};
+  score=0; wave=1; kills=0; dualMode=false;
+  spawnTimer=0; spawnGap=1.6; elapsed=0; muzzle=0; shake=0;
+  dualBadge.style.display='none';
   syncHud();
 }
 function syncHud(){
   scoreEl.textContent=score;
+  killsEl.textContent=kills;
   waveEl.textContent=wave;
   hpEl.innerHTML='';
   for(let i=0;i<player.maxHp;i++){
     const i2=document.createElement('i');
     if(i>=player.hp) i2.className='lost';
     hpEl.appendChild(i2);
+  }
+}
+function checkDual(){
+  if(!dualMode && kills>=DUAL_AT){
+    dualMode=true;
+    dualBadge.style.display='block';
+    banner={ text:'쌍권총 모드!', life:2.4 };
+    sfxDual();
   }
 }
 
@@ -258,26 +333,41 @@ function rand(a,b){ return a+Math.random()*(b-a); }
 
 /* ───────────────────────── 사격 처리 ───────────────────────── */
 function doShot(){
-  muzzle=1; shake=Math.max(shake,5);
-  shots.push({ x:aim.x, y:aim.y, life:1 });
-  // 가장 위(나중에 그려진=가까운) 좀비부터 검사
-  for(let i=zombies.length-1;i>=0;i--){
-    const z=zombies[i];
-    const d=Math.hypot(z.x-aim.x, z.y-aim.y);
-    if(d<=z.t.r){
-      z.hp--; z.hitFlash=1;
-      hitParticles(aim.x,aim.y, z.t.body, 8);
-      if(z.hp<=0){
-        score+=z.t.score;
-        deathParticles(z.x,z.y,z.t.body);
-        zombies.splice(i,1);
-        syncHud();
-      }
-      return; // 한 발에 한 마리
+  muzzle=1; shake=Math.max(shake,dualMode?7:5);
+  dualMode ? sfxShootDual() : sfxShoot();
+
+  const maxTargets = dualMode ? 2 : 1;
+  // 조준점에서 가까운 순으로 후보 정렬
+  const cand = zombies.map(z=>({ z, d:Math.hypot(z.x-aim.x, z.y-aim.y) }))
+                      .sort((a,b)=>a.d-b.d);
+  const dead=[];
+  let used=0;
+  for(const c of cand){
+    if(used>=maxTargets) break;
+    // 첫 발은 조준 반경 내, 쌍권총 두 번째 발은 넉넉히(+120px)
+    const reach = c.z.t.r + (used>0 ? 120 : 0);
+    if(c.d<=reach){
+      c.z.hp--; c.z.hitFlash=1; used++;
+      hitParticles(c.z.x,c.z.y, c.z.t.body, 8);
+      shots.push({ x:c.z.x, y:c.z.y, life:1 });
+      if(c.z.hp<=0) dead.push(c.z); else sfxHit();
     }
   }
-  // 빗나감 — 작은 먼지
-  hitParticles(aim.x,aim.y,'#2c6b3a',4);
+  if(used===0){ // 빗나감
+    shots.push({ x:aim.x, y:aim.y, life:1 });
+    hitParticles(aim.x,aim.y,'#2c6b3a',4);
+  }
+  // 처치 처리 — 점수 누적 + 팝업
+  for(const z of dead){
+    const i=zombies.indexOf(z);
+    if(i<0) continue;
+    score+=z.t.score; kills++;
+    popups.push({ x:z.x, y:z.y, text:'+'+z.t.score, life:1, color:'#ffd23b' });
+    deathParticles(z.x,z.y,z.t.body);
+    sfxKill();
+    zombies.splice(i,1);
+  }
+  if(dead.length){ syncHud(); checkDual(); }
 }
 
 function hitParticles(x,y,color,n){
@@ -327,6 +417,7 @@ function gameOver(){
   finalScoreEl.textContent=score;
   hudEl.classList.add('hidden');
   overScreen.classList.remove('hidden');
+  sfxOver();
 }
 
 /* ───────────────────────── 업데이트 ───────────────────────── */
@@ -364,7 +455,7 @@ function update(now){
       if(z.hitFlash>0) z.hitFlash-=dt*4;
       if(d<58){ // 주인공 도달
         player.hp--; shake=Math.max(shake,14);
-        deathParticles(z.x,z.y,'#ff5a5a');
+        deathParticles(z.x,z.y,'#ff5a5a'); sfxDamage();
         zombies.splice(i,1); syncHud();
         if(player.hp<=0){ gameOver(); }
       }
@@ -381,6 +472,8 @@ function update(now){
     if(p.life<=0) particles.splice(i,1);
   }
   for(let i=shots.length-1;i>=0;i--){ shots[i].life-=dt*3.5; if(shots[i].life<=0) shots.splice(i,1); }
+  for(let i=popups.length-1;i>=0;i--){ const p=popups[i]; p.y-=34*dt; p.life-=dt*0.9; if(p.life<=0) popups.splice(i,1); }
+  if(banner.life>0) banner.life-=dt;
   if(muzzle>0) muzzle-=dt*5;
   if(shake>0) shake-=dt*30;
 }
@@ -422,8 +515,29 @@ function render(){
   gtx.globalAlpha=1;
   gtx.restore();
 
+  // 점수 팝업 (흔들림 영향 X)
+  gtx.textAlign='center'; gtx.font="bold 22px 'Galmuri11',monospace";
+  for(const p of popups){
+    gtx.globalAlpha=Math.max(0,Math.min(1,p.life*1.5));
+    gtx.fillStyle='#04140a'; gtx.fillText(p.text,p.x+2,p.y+2);
+    gtx.fillStyle=p.color;   gtx.fillText(p.text,p.x,p.y);
+  }
+  gtx.globalAlpha=1;
+
   // 조준점 (항상 최상단, 흔들림 영향 X)
   drawCrosshair(aim.x,aim.y);
+
+  // 중앙 알림 배너 (조준점 캔버스 = 최상단)
+  if(banner.life>0){
+    ctx.save();
+    ctx.globalAlpha=Math.min(1,banner.life);
+    ctx.textAlign='center';
+    ctx.font="40px 'Galmuri14','Galmuri11',monospace";
+    ctx.fillStyle='#04140a'; ctx.fillText(banner.text,W/2+3,H*0.28+3);
+    ctx.fillStyle='#ffd23b'; ctx.shadowColor='#ffd23b'; ctx.shadowBlur=22;
+    ctx.fillText(banner.text,W/2,H*0.28);
+    ctx.restore();
+  }
 }
 
 function drawGrid(){
@@ -437,53 +551,138 @@ function px(x,y,w,h,c){ gtx.fillStyle=c; gtx.fillRect(Math.round(x),Math.round(y
 
 function drawPlayer(x,y){
   const u=9; // 픽셀 단위
+  const C='#7CFFB0', D='#2f8f5a', SK='#e7c7a0';
   gtx.save(); gtx.translate(x,y);
-  // 그림자 링
-  gtx.strokeStyle='rgba(57,255,20,.35)'; gtx.lineWidth=2;
+  // 그림자 링 (쌍권총이면 금색)
+  gtx.strokeStyle= dualMode?'rgba(255,210,59,.5)':'rgba(57,255,20,.35)';
+  gtx.lineWidth=2;
   gtx.beginPath(); gtx.arc(0,0,60,0,6.28); gtx.stroke();
-  // 픽셀 생존자 (머리/몸/팔) — 밝은 시안그린
-  const C='#7CFFB0', D='#2f8f5a';
-  px(-u, -u*3.2, u*2, u*2, C);      // 머리
-  px(-u*1.5, -u*1.0, u*3, u*2.4, C);// 몸통
-  px(-u*1.5, -u*1.0, u*0.8, u*2.4, D);
-  px(u*0.7, -u*1.0, u*0.8, u*2.4, D);
-  px(-u*1.0, u*1.4, u*0.8, u*1.6, C); // 다리
-  px(u*0.2, u*1.4, u*0.8, u*1.6, C);
-  // 총구 방향 (조준점 쪽)
+  // 다리
+  px(-u*1.0,u*1.4,u*0.8,u*1.8,D);
+  px(u*0.3, u*1.4,u*0.8,u*1.8,D);
+  // 방탄 조끼 몸통
+  px(-u*1.6,-u*1.0,u*3.2,u*2.6,C);
+  px(-u*1.6,-u*1.0,u*3.2,u*0.6,D);   // 카라
+  px(-u*0.25,-u*0.8,u*0.5,u*2.2,D);  // 지퍼
+  px(u*0.7,-u*0.4,u*0.6,u*0.6,'#ffd23b'); // 탄띠 배지
+  // 머리 + 빨간 두건
+  px(-u*1.0,-u*3.2,u*2.0,u*2.0,SK);
+  px(-u*1.0,-u*3.2,u*2.0,u*0.7,'#c0392b'); // 두건
+  px(-u*1.0,-u*2.55,u*0.5,u*0.4,'#c0392b'); // 두건 꼬리
+  px(-u*0.55,-u*2.4,u*0.45,u*0.45,'#222'); // 눈
+  px(u*0.15,-u*2.4,u*0.45,u*0.45,'#222');
+  gtx.restore();
+  // 조준 방향 총 (쌍권총이면 2자루)
   const a=Math.atan2(aim.y-y,aim.x-x);
-  gtx.rotate(a);
-  px(u*0.5,-u*0.4,u*2.2,u*0.8,'#dfffe9');
+  if(dualMode){ drawGun(x,y,a,-1); drawGun(x,y,a,1); }
+  else drawGun(x,y,a,0);
+}
+function drawGun(x,y,a,side){
+  gtx.save(); gtx.translate(x,y); gtx.rotate(a);
+  gtx.translate(0, side*15); // 좌우 손 오프셋(조준축 기준 수직)
+  px(2,-5,9,10,'#9fe9b6');   // 그립/몸체
+  px(8,-3,18,6,'#dfffe9');   // 총열
+  px(25,-2.5,5,5,'#ffd23b'); // 총구
+  if(muzzle>0.4){ // 머즐 플래시
+    gtx.globalAlpha=(muzzle-0.4)*1.6;
+    px(29,-4,8,8,'#ffffff'); gtx.globalAlpha=1;
+  }
   gtx.restore();
 }
 
 function drawZombie(z){
   const t=z.t, u=t.r/4;
-  gtx.save(); gtx.translate(z.x,z.y);
-  const sway=Math.sin(z.wob)*u*0.4;
   const flash=z.hitFlash>0;
   const body=flash?'#ffffff':t.body;
   const dark=flash?'#ffd0d0':t.dark;
-  // 머리
-  px(-u*1.4+sway,-u*3.6,u*2.8,u*2.6,body);
-  // 눈 (붉은 점)
-  px(-u*0.9+sway,-u*2.9,u*0.7,u*0.7,'#ff2b2b');
-  px(u*0.3+sway,-u*2.9,u*0.7,u*0.7,'#ff2b2b');
-  // 몸통
-  px(-u*2.0,-u*1.0,u*4,u*3.2,body);
-  px(-u*2.0,-u*1.0,u*4,u*0.7,dark);
-  // 팔 (앞으로 뻗음)
-  px(-u*2.8,-u*0.4,u*0.9,u*2.2,dark);
-  px(u*1.9,-u*0.4,u*0.9,u*2.2,dark);
-  // 다리
-  px(-u*1.4,u*2.0,u*1.0,u*1.8,dark);
-  px(u*0.4,u*2.0,u*1.0,u*1.8,dark);
-  // 큰놈 체력바
-  if(t.hp>1){
-    const w=t.r*1.8;
-    gtx.fillStyle='#0c3d1c'; gtx.fillRect(-w/2,-t.r-14,w,5);
-    gtx.fillStyle='#39ff14'; gtx.fillRect(-w/2,-t.r-14,w*(z.hp/z.maxHp),5);
+  gtx.save(); gtx.translate(z.x,z.y);
+  if(z.key==='fast')      drawFastZombie(z,u,body,dark);
+  else if(z.key==='big')  drawBigZombie(z,u,body,dark);
+  else                    drawNormalZombie(z,u,body,dark);
+  if(t.hp>1){ // 체력바 (큰놈)
+    const w=t.r*1.7;
+    gtx.fillStyle='#0c3d1c'; gtx.fillRect(-w/2,-t.r-16,w,5);
+    gtx.fillStyle='#39ff14'; gtx.fillRect(-w/2,-t.r-16,w*(z.hp/z.maxHp),5);
   }
   gtx.restore();
+}
+
+// 일반: 비틀대며 양팔을 앞으로 뻗은 표준 좀비, 찢긴 옷·상처
+function drawNormalZombie(z,u,body,dark){
+  const sway=Math.sin(z.wob)*u*0.35;
+  const sk='#cdb89a';
+  // 다리 (엇갈린 걸음)
+  px(-u*1.3, u*2.0, u*1.0, u*1.9+sway, dark);
+  px(u*0.4,  u*2.0, u*1.0, u*1.9-sway, dark);
+  // 몸통 + 찢긴 옷
+  px(-u*2.0,-u*1.0,u*4,u*3.2,body);
+  px(-u*2.0,-u*1.0,u*4,u*0.7,dark);
+  px(-u*0.3,u*0.4,u*0.6,u*1.2,'#7a1f1f'); // 가슴 상처
+  px(-u*1.6,u*1.4,u*1.0,u*0.5,dark);
+  // 앞으로 뻗은 팔 + 손
+  px(-u*3.0,-u*0.5+sway,u*1.1,u*2.0,body);
+  px(u*1.9, -u*0.5-sway,u*1.1,u*2.0,body);
+  px(-u*3.0,u*1.3+sway,u*1.1,u*0.8,sk);
+  px(u*1.9, u*1.3-sway,u*1.1,u*0.8,sk);
+  // 머리
+  px(-u*1.4+sway*0.5,-u*3.8,u*2.8,u*2.8,body);
+  px(-u*0.9,-u*3.0,u*0.7,u*0.7,'#ff2b2b'); // 눈
+  px(u*0.3, -u*3.0,u*0.7,u*0.7,'#ff2b2b');
+  px(-u*0.8,-u*1.6,u*1.6,u*0.5,'#3a0a0a'); // 입
+}
+
+// 빠른: 앞으로 기울인 날렵한 실루엣 + 속도선, 가는 팔다리
+function drawFastZombie(z,u,body,dark){
+  const lean=u*0.9, run=Math.sin(z.wob*1.6)*u*0.9;
+  // 진행 반대 방향으로 속도선
+  const ang=Math.atan2(z.y-H/2, z.x-W/2);
+  gtx.save();
+  gtx.globalAlpha=.45; gtx.strokeStyle=body; gtx.lineWidth=2;
+  for(let i=-1;i<=1;i++){
+    const ox=-Math.sin(ang)*i*u*1.3, oy=Math.cos(ang)*i*u*1.3;
+    gtx.beginPath();
+    gtx.moveTo(Math.cos(ang)*u*2.5+ox, Math.sin(ang)*u*2.5+oy);
+    gtx.lineTo(Math.cos(ang)*u*6.0+ox, Math.sin(ang)*u*6.0+oy);
+    gtx.stroke();
+  }
+  gtx.restore();
+  // 질주 다리 (앞뒤로 벌림)
+  px(-u*1.8+lean, u*1.6, u*0.8, u*2.0+run, dark);
+  px(u*0.7+lean,  u*1.6, u*0.8, u*2.0-run, dark);
+  // 기울인 가는 몸통
+  px(-u*1.3+lean,-u*1.2,u*2.4,u*3.0,body);
+  px(-u*1.3+lean,-u*1.2,u*2.4,u*0.5,dark);
+  // 뒤로 젖힌 팔 + 앞으로 뻗은 팔
+  px(-u*2.6+lean*0.4,-u*0.6,u*0.9,u*1.8,body);
+  px(u*0.9+lean*1.6,-u*1.0,u*0.9,u*1.7,body);
+  // 앞으로 내민 작은 머리
+  px(-u*0.4+lean*1.7,-u*3.4,u*2.2,u*2.2,body);
+  px(u*0.4+lean*1.7,-u*2.7,u*0.6,u*0.6,'#ff2b2b'); // 눈
+  px(u*1.2+lean*1.7,-u*1.9,u*0.8,u*0.4,'#3a0a0a'); // 벌린 입
+}
+
+// 큰놈: 거대한 어깨·두꺼운 팔, 작게 파묻힌 머리, 꿰맨 자국
+function drawBigZombie(z,u,body,dark){
+  const sway=Math.sin(z.wob*0.7)*u*0.25;
+  // 굵은 다리
+  px(-u*1.9, u*2.2, u*1.6, u*1.9, dark);
+  px(u*0.3,  u*2.2, u*1.6, u*1.9, dark);
+  // 거대한 몸통
+  px(-u*2.9,-u*1.6,u*5.8,u*4.0,body);
+  px(-u*2.9,-u*1.6,u*5.8,u*0.9,dark); // 어깨 그늘
+  // 꿰맨 자국 (세로 + 가로 스티치)
+  px(-u*0.1,-u*1.4,u*0.3,u*3.4,dark);
+  for(let i=-1;i<4;i++) px(-u*0.5,(-u*1.0)+i*u*0.9,u*1.1,u*0.18,dark);
+  // 두꺼운 팔 + 주먹
+  px(-u*4.2,-u*1.2+sway,u*1.5,u*3.4,body);
+  px(u*2.7, -u*1.2-sway,u*1.5,u*3.4,body);
+  px(-u*4.4,u*1.9+sway,u*1.9,u*1.2,dark);
+  px(u*2.5, u*1.9-sway,u*1.9,u*1.2,dark);
+  // 작게 파묻힌 머리 + 두꺼운 눈썹
+  px(-u*1.3+sway*0.5,-u*3.0,u*2.6,u*1.9,body);
+  px(-u*1.3,-u*3.0,u*2.6,u*0.45,dark); // 눈썹
+  px(-u*0.8,-u*2.5,u*0.7,u*0.7,'#ff2b2b');
+  px(u*0.2, -u*2.5,u*0.7,u*0.7,'#ff2b2b');
 }
 
 function drawCrosshair(x,y){
