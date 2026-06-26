@@ -144,7 +144,8 @@
   <div class="sub">
     검지 손가락으로 <b>조준점</b>을 움직이고<br>
     <b>윙크(한쪽 눈 감기)</b> 로 좀비를 사격하세요.<br>
-    조준점을 버튼에 올리고 윙크하면 클릭됩니다.
+    조준점을 버튼에 올리고 윙크하면 클릭됩니다.<br>
+    <b style="color:#23e0ff">10킬 달성 시 쌍권총</b> — 양손으로 조준점 2개!
   </div>
   <button class="btn" id="startBtn" data-action="start">▶ 게임 시작</button>
 </div>
@@ -204,9 +205,11 @@ const STATE = { MENU:'menu', PLAY:'play', OVER:'over' };
 let state = STATE.MENU;
 
 // 조준점 (화면 좌표, 스무딩 적용)
-const aim = { x:W/2, y:H/2, tx:W/2, ty:H/2, found:false };
+const aim  = { x:W/2, y:H/2, tx:W/2, ty:H/2, found:false }; // 1번 손(왼쪽)
+const aim2 = { x:W/2, y:H/2, tx:W/2, ty:H/2, found:false }; // 2번 손(오른쪽, 쌍권총)
 const AIM_GAIN = 2.3;     // 손가락 움직임 증폭
 const AIM_SMOOTH = 0.35;  // lerp 계수
+const clamp01 = v=>Math.max(0,Math.min(1,v));
 
 // 윙크 / 발사 입력
 let winkArmed = true;     // 다시 무장됐는지 (눈 떠야 재무장)
@@ -336,28 +339,13 @@ function doShot(){
   muzzle=1; shake=Math.max(shake,dualMode?7:5);
   dualMode ? sfxShootDual() : sfxShoot();
 
-  const maxTargets = dualMode ? 2 : 1;
-  // 조준점에서 가까운 순으로 후보 정렬
-  const cand = zombies.map(z=>({ z, d:Math.hypot(z.x-aim.x, z.y-aim.y) }))
-                      .sort((a,b)=>a.d-b.d);
   const dead=[];
-  let used=0;
-  for(const c of cand){
-    if(used>=maxTargets) break;
-    // 첫 발은 조준 반경 내, 쌍권총 두 번째 발은 넉넉히(+120px)
-    const reach = c.z.t.r + (used>0 ? 120 : 0);
-    if(c.d<=reach){
-      c.z.hp--; c.z.hitFlash=1; used++;
-      hitParticles(c.z.x,c.z.y, c.z.t.body, 8);
-      shots.push({ x:c.z.x, y:c.z.y, life:1 });
-      if(c.z.hp<=0) dead.push(c.z); else sfxHit();
-    }
-  }
-  if(used===0){ // 빗나감
-    shots.push({ x:aim.x, y:aim.y, life:1 });
-    hitParticles(aim.x,aim.y,'#2c6b3a',4);
-  }
-  // 처치 처리 — 점수 누적 + 팝업
+  // 1번 손(왼쪽 총)은 항상 사격
+  fireFrom(aim.x, aim.y, dead);
+  // 쌍권총: 2번 손(오른쪽 총)도 동시에 사격
+  if(dualMode && aim2.found) fireFrom(aim2.x, aim2.y, dead);
+
+  // 처치 처리 — 점수 누적 + 팝업 (양손이 같은 좀비를 잡아도 1회만 집계)
   for(const z of dead){
     const i=zombies.indexOf(z);
     if(i<0) continue;
@@ -368,6 +356,25 @@ function doShot(){
     zombies.splice(i,1);
   }
   if(dead.length){ syncHud(); checkDual(); }
+}
+
+// 한 조준점에서 한 발 — 조준 반경 안의 가장 가까운 좀비를 명중
+function fireFrom(ax,ay,dead){
+  let best=null, bestD=Infinity;
+  for(const z of zombies){
+    const d=Math.hypot(z.x-ax, z.y-ay);
+    if(d<=z.t.r && d<bestD){ best=z; bestD=d; }
+  }
+  if(best){
+    best.hp--; best.hitFlash=1;
+    hitParticles(best.x,best.y, best.t.body, 8);
+    shots.push({ x:best.x, y:best.y, life:1 });
+    if(best.hp<=0){ if(!dead.includes(best)) dead.push(best); }
+    else sfxHit();
+  } else { // 빗나감
+    shots.push({ x:ax, y:ay, life:1 });
+    hitParticles(ax,ay,'#2c6b3a',4);
+  }
 }
 
 function hitParticles(x,y,color,n){
@@ -428,6 +435,8 @@ function update(now){
   // 조준점 스무딩
   aim.x += (aim.tx-aim.x)*AIM_SMOOTH;
   aim.y += (aim.ty-aim.y)*AIM_SMOOTH;
+  aim2.x += (aim2.tx-aim2.x)*AIM_SMOOTH;
+  aim2.y += (aim2.ty-aim2.y)*AIM_SMOOTH;
 
   const fire=fireEvent; fireEvent=false;
 
@@ -525,7 +534,9 @@ function render(){
   gtx.globalAlpha=1;
 
   // 조준점 (항상 최상단, 흔들림 영향 X)
-  drawCrosshair(aim.x,aim.y);
+  drawCrosshair(aim.x,aim.y,aim.found,'#39ff14');
+  // 쌍권총: 두 번째 손 조준점 (시안)
+  if(dualMode && aim2.found) drawCrosshair(aim2.x,aim2.y,true,'#23e0ff');
 
   // 중앙 알림 배너 (조준점 캔버스 = 최상단)
   if(banner.life>0){
@@ -572,10 +583,15 @@ function drawPlayer(x,y){
   px(-u*0.55,-u*2.4,u*0.45,u*0.45,'#222'); // 눈
   px(u*0.15,-u*2.4,u*0.45,u*0.45,'#222');
   gtx.restore();
-  // 조준 방향 총 (쌍권총이면 2자루)
-  const a=Math.atan2(aim.y-y,aim.x-x);
-  if(dualMode){ drawGun(x,y,a,-1); drawGun(x,y,a,1); }
-  else drawGun(x,y,a,0);
+  // 조준 방향 총 — 쌍권총이면 각 총이 자기 조준점을 겨냥
+  const a1=Math.atan2(aim.y-y,aim.x-x);
+  if(dualMode){
+    drawGun(x,y,a1,-1);
+    const a2=aim2.found ? Math.atan2(aim2.y-y,aim2.x-x) : a1;
+    drawGun(x,y,a2,1);
+  } else {
+    drawGun(x,y,a1,0);
+  }
 }
 function drawGun(x,y,a,side){
   gtx.save(); gtx.translate(x,y); gtx.rotate(a);
@@ -685,10 +701,10 @@ function drawBigZombie(z,u,body,dark){
   px(u*0.2, -u*2.5,u*0.7,u*0.7,'#ff2b2b');
 }
 
-function drawCrosshair(x,y){
+function drawCrosshair(x,y,found=true,base='#39ff14'){
   const r=36;
   ctx.save(); ctx.translate(x,y);
-  const col=winkActive?'#ffd23b':'#39ff14';
+  const col=winkActive?'#ffd23b':base;
   ctx.strokeStyle=col; ctx.lineWidth=4;
   ctx.shadowColor=col; ctx.shadowBlur=18;
   // 원
@@ -711,7 +727,7 @@ function drawCrosshair(x,y){
     ctx.globalAlpha=1;
   }
   // 손가락 미감지 안내
-  if(!aim.found){
+  if(!found){
     ctx.fillStyle='#ff3b3b'; ctx.font="13px 'Galmuri11',monospace";
     ctx.textAlign='center'; ctx.fillText('손을 보여주세요',0,r+30);
   }
@@ -727,7 +743,7 @@ async function setupModels(){
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
   handLM=await HandLandmarker.createFromOptions(vision,{
     baseOptions:{ modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate:"GPU" },
-    runningMode:"VIDEO", numHands:1
+    runningMode:"VIDEO", numHands:2
   });
   faceLM=await FaceLandmarker.createFromOptions(vision,{
     baseOptions:{ modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate:"GPU" },
@@ -750,22 +766,23 @@ function processVision(now){
   if(video.currentTime===lastVideoTime) return;
   lastVideoTime=video.currentTime;
 
-  // 손 → 조준점
+  // 손 → 조준점 (최대 2개)
   const hr=handLM.detectForVideo(video,now);
-  if(hr && hr.landmarks && hr.landmarks.length){
-    const lm=hr.landmarks[0];
-    const tip=lm[8]; // 검지 끝
-    // 미러 + 중심 기준 증폭
-    let fx=1-tip.x, fy=tip.y;
-    let ax=0.5+(fx-0.5)*AIM_GAIN;
-    let ay=0.5+(fy-0.5)*AIM_GAIN;
-    ax=Math.max(0,Math.min(1,ax)); ay=Math.max(0,Math.min(1,ay));
-    aim.tx=ax*W; aim.ty=ay*H; aim.found=true;
-    drawCamDebug(lm,hr);
-  } else {
-    aim.found=false;
-    drawCamDebug(null,null);
-  }
+  const hands=(hr && hr.landmarks)?hr.landmarks:[];
+  // 각 손 검지끝(8)을 미러+증폭해서 화면좌표로
+  const pts=hands.map(lm=>{
+    const tip=lm[8];
+    const ax=clamp01(0.5+((1-tip.x)-0.5)*AIM_GAIN);
+    const ay=clamp01(0.5+(tip.y-0.5)*AIM_GAIN);
+    return { x:ax*W, y:ay*H };
+  });
+  // 화면 x 기준 정렬 → 왼쪽 손=aim, 오른쪽 손=aim2
+  pts.sort((a,b)=>a.x-b.x);
+  if(pts.length>=1){ aim.tx=pts[0].x; aim.ty=pts[0].y; aim.found=true; }
+  else aim.found=false;
+  if(pts.length>=2){ aim2.tx=pts[1].x; aim2.ty=pts[1].y; aim2.found=true; }
+  else aim2.found=false;
+  drawCamDebug(hands);
 
   // 얼굴 → 윙크
   const fr=faceLM.detectForVideo(video,now);
@@ -784,16 +801,15 @@ function processVision(now){
   if(bothOpen) winkArmed=true; // 눈 뜨면 재무장
 }
 
-function drawCamDebug(lm,hr){
+function drawCamDebug(hands){
   cmx.save();
   cmx.fillStyle='#000'; cmx.fillRect(0,0,188,106);
   // 미러 영상 대신 랜드마크만 표시 (가벼움)
   cmx.translate(188,0); cmx.scale(-1,1); // 미러
-  if(lm){
+  for(const lm of (hands||[])){
     cmx.fillStyle='#39ff14';
     for(const p of lm){ cmx.fillRect(p.x*188-1,p.y*106-1,2,2); }
-    // 검지 끝 강조
-    const t=lm[8];
+    const t=lm[8]; // 검지 끝 강조
     cmx.fillStyle='#ffd23b'; cmx.fillRect(t.x*188-3,t.y*106-3,6,6);
   }
   cmx.restore();
