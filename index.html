@@ -34,7 +34,7 @@
   canvas{ display:block; position:absolute; inset:0; width:100%; height:100%; }
   #game{ z-index:1; background:radial-gradient(circle at 50% 50%, #06210f 0%, #04140a 70%, #020a05 100%); }
   /* 위는 캔버스 클리어색이 아니라 단순 비네팅 — 그라데이션 금지는 UI/도형에 적용 */
-  #cursor{ z-index:50; pointer-events:none; }
+  #cursor{ position:fixed; inset:0; z-index:100; pointer-events:none; }
 
   /* 스캔라인 오버레이 */
   #scan{
@@ -118,9 +118,10 @@
 <body>
 <div id="stage">
   <canvas id="game"></canvas>
-  <canvas id="cursor"></canvas>
 </div>
 <div id="scan"></div>
+<!-- 조준점은 모든 오버레이 위에 떠야 하므로 stage 밖, 최상단 -->
+<canvas id="cursor"></canvas>
 
 <div id="hud" class="hidden">
   <div class="box"><span class="lab">SCORE</span><span class="val" id="score">0</span></div>
@@ -211,9 +212,9 @@ let muzzle=0;       // 발사 플래시 타이머
 let shake=0;        // 화면 흔들림
 
 const TYPES = {
-  normal:{ hp:1, speed:42,  r:24, score:10, body:'#3bd16a', dark:'#187a39', name:'일반' },
-  fast:  { hp:1, speed:86,  r:19, score:15, body:'#c8ff4d', dark:'#6f8a1f', name:'빠른' },
-  big:   { hp:3, speed:24,  r:44, score:30, body:'#1f8a45', dark:'#0c3d1c', name:'큰놈' },
+  normal:{ hp:1, speed:42,  r:36, score:10, body:'#3bd16a', dark:'#187a39', name:'일반' },
+  fast:  { hp:1, speed:86,  r:29, score:15, body:'#c8ff4d', dark:'#6f8a1f', name:'빠른' },
+  big:   { hp:3, speed:24,  r:66, score:30, body:'#1f8a45', dark:'#0c3d1c', name:'큰놈' },
 };
 
 function resetGame(){
@@ -361,7 +362,7 @@ function update(now){
       z.y+=dy/d*z.t.speed*dt;
       z.wob+=dt*8;
       if(z.hitFlash>0) z.hitFlash-=dt*4;
-      if(d<46){ // 주인공 도달
+      if(d<58){ // 주인공 도달
         player.hp--; shake=Math.max(shake,14);
         deathParticles(z.x,z.y,'#ff5a5a');
         zombies.splice(i,1); syncHud();
@@ -435,11 +436,11 @@ function drawGrid(){
 function px(x,y,w,h,c){ gtx.fillStyle=c; gtx.fillRect(Math.round(x),Math.round(y),w,h); }
 
 function drawPlayer(x,y){
-  const u=6; // 픽셀 단위
+  const u=9; // 픽셀 단위
   gtx.save(); gtx.translate(x,y);
   // 그림자 링
   gtx.strokeStyle='rgba(57,255,20,.35)'; gtx.lineWidth=2;
-  gtx.beginPath(); gtx.arc(0,0,40,0,6.28); gtx.stroke();
+  gtx.beginPath(); gtx.arc(0,0,60,0,6.28); gtx.stroke();
   // 픽셀 생존자 (머리/몸/팔) — 밝은 시안그린
   const C='#7CFFB0', D='#2f8f5a';
   px(-u, -u*3.2, u*2, u*2, C);      // 머리
@@ -486,34 +487,34 @@ function drawZombie(z){
 }
 
 function drawCrosshair(x,y){
-  const r=18;
+  const r=36;
   ctx.save(); ctx.translate(x,y);
   const col=winkActive?'#ffd23b':'#39ff14';
-  ctx.strokeStyle=col; ctx.lineWidth=2.5;
-  ctx.shadowColor=col; ctx.shadowBlur=12;
+  ctx.strokeStyle=col; ctx.lineWidth=4;
+  ctx.shadowColor=col; ctx.shadowBlur=18;
   // 원
   ctx.beginPath(); ctx.arc(0,0,r,0,6.28); ctx.stroke();
   // 십자
   ctx.beginPath();
-  ctx.moveTo(-r-7,0); ctx.lineTo(-5,0);
-  ctx.moveTo(r+7,0);  ctx.lineTo(5,0);
-  ctx.moveTo(0,-r-7); ctx.lineTo(0,-5);
-  ctx.moveTo(0,r+7);  ctx.lineTo(0,5);
+  ctx.moveTo(-r-14,0); ctx.lineTo(-10,0);
+  ctx.moveTo(r+14,0);  ctx.lineTo(10,0);
+  ctx.moveTo(0,-r-14); ctx.lineTo(0,-10);
+  ctx.moveTo(0,r+14);  ctx.lineTo(0,10);
   ctx.stroke();
   ctx.shadowBlur=0;
   // 중심점
-  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(0,0,2.5,0,6.28); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(0,0,5,0,6.28); ctx.fill();
   // 발사 플래시
   if(muzzle>0){
     ctx.globalAlpha=muzzle;
-    ctx.strokeStyle='#fff'; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(0,0,r+10*(1-muzzle)+6,0,6.28); ctx.stroke();
+    ctx.strokeStyle='#fff'; ctx.lineWidth=5;
+    ctx.beginPath(); ctx.arc(0,0,r+20*(1-muzzle)+12,0,6.28); ctx.stroke();
     ctx.globalAlpha=1;
   }
   // 손가락 미감지 안내
   if(!aim.found){
-    ctx.fillStyle='#ff3b3b'; ctx.font="11px 'Galmuri11',monospace";
-    ctx.textAlign='center'; ctx.fillText('손을 보여주세요',0,r+26);
+    ctx.fillStyle='#ff3b3b'; ctx.font="13px 'Galmuri11',monospace";
+    ctx.textAlign='center'; ctx.fillText('손을 보여주세요',0,r+30);
   }
   ctx.restore();
 }
@@ -542,7 +543,7 @@ async function setupCamera(){
   await new Promise(res=>video.onloadedmetadata=()=>{ video.play(); res(); });
 }
 
-const WINK_ON=0.55, WINK_OFF=0.30, OPEN=0.35;
+const WINK_ON=0.40, WINK_OFF=0.22, OPEN=0.55;
 let lastVideoTime=-1;
 
 function processVision(now){
